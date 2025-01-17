@@ -26,9 +26,9 @@ import (
 	wstats "github.com/Microsoft/hcsshim/cmd/containerd-shim-runhcs-v1/stats"
 	v1 "github.com/containerd/cgroups/v3/cgroup1/stats"
 	v2 "github.com/containerd/cgroups/v3/cgroup2/stats"
-	"github.com/containerd/containerd/cmd/ctr/commands"
+	"github.com/containerd/containerd/v2/cmd/ctr/commands"
 	"github.com/containerd/typeurl/v2"
-	"github.com/urfave/cli"
+	"github.com/urfave/cli/v2"
 )
 
 const (
@@ -37,25 +37,25 @@ const (
 	formatJSON  = "json"
 )
 
-var metricsCommand = cli.Command{
+var metricsCommand = &cli.Command{
 	Name:      "metrics",
 	Usage:     "Get a single data point of metrics for a task with the built-in Linux runtime",
 	ArgsUsage: "CONTAINER",
 	Aliases:   []string{"metric"},
 	Flags: []cli.Flag{
-		cli.StringFlag{
+		&cli.StringFlag{
 			Name:  formatFlag,
 			Usage: `"table" or "json"`,
 			Value: formatTable,
 		},
 	},
-	Action: func(context *cli.Context) error {
-		client, ctx, cancel, err := commands.NewClient(context)
+	Action: func(cliContext *cli.Context) error {
+		client, ctx, cancel, err := commands.NewClient(cliContext)
 		if err != nil {
 			return err
 		}
 		defer cancel()
-		container, err := client.LoadContainer(ctx, context.Args().First())
+		container, err := client.LoadContainer(ctx, cliContext.Args().First())
 		if err != nil {
 			return err
 		}
@@ -83,7 +83,7 @@ var metricsCommand = cli.Command{
 			return err
 		}
 
-		switch context.String(formatFlag) {
+		switch cliContext.String(formatFlag) {
 		case formatTable:
 			w := tabwriter.NewWriter(os.Stdout, 1, 8, 4, ' ', 0)
 			fmt.Fprintf(w, "ID\tTIMESTAMP\t\n")
