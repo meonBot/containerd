@@ -22,20 +22,21 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 
-	apitask "github.com/containerd/containerd/api/runtime/task/v2"
-	"github.com/containerd/containerd/integration/images"
-	"github.com/containerd/containerd/namespaces"
-	"github.com/containerd/containerd/runtime/v2/shim"
+	apitask "github.com/containerd/containerd/api/runtime/task/v3"
+	shimcore "github.com/containerd/containerd/v2/core/runtime/v2"
+	"github.com/containerd/containerd/v2/integration/images"
+	"github.com/containerd/containerd/v2/pkg/namespaces"
+	"github.com/containerd/containerd/v2/pkg/shim"
 	"github.com/containerd/ttrpc"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	exec "golang.org/x/sys/execabs"
 )
 
 // TestIssue7496 is used to reproduce https://github.com/containerd/containerd/issues/7496
@@ -49,7 +50,7 @@ func TestIssue7496(t *testing.T) {
 	sbID, err := runtimeService.RunPodSandbox(sbConfig, *runtimeHandler)
 	require.NoError(t, err)
 
-	shimCli := connectToShim(ctx, t, sbID)
+	shimCli := connectToShim(ctx, t, containerdEndpoint, 3, sbID)
 
 	delayInSec := 12
 	t.Logf("[shim pid: %d]: Injecting %d seconds delay to umount2 syscall",
@@ -111,16 +112,18 @@ func TestIssue7496(t *testing.T) {
 // example, umount overlayfs rootfs which doesn't with volatile.
 //
 // REF: https://man7.org/linux/man-pages/man1/strace.1.html
-func injectDelayToUmount2(ctx context.Context, t *testing.T, shimCli apitask.TaskService, delayInSec int) chan struct{} {
+func injectDelayToUmount2(ctx context.Context, t *testing.T, shimCli apitask.TTRPCTaskService, delayInSec int) chan struct{} {
 	pid := shimPid(ctx, t, shimCli)
 
 	doneCh := make(chan struct{})
 
+	// use strace command to mock the delay of umount2
+	// this require strace version >= 4.22
 	cmd := exec.CommandContext(ctx, "strace",
 		"-p", strconv.Itoa(int(pid)), "-f", // attach to all the threads
-		"--detach-on=execve", // stop to attach runc child-processes
-		"--trace=umount2",    // only trace umount2 syscall
-		"-e", "inject=umount2:delay_enter="+strconv.Itoa(delayInSec)+"s",
+		"-b", "execve", // stop to attach runc child-processes
+		"-e", "trace=umount2", // only trace umount2 syscall
+		"-e", "inject=umount2:delay_enter="+strconv.Itoa(delayInSec)+"000000",
 	)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
 
@@ -153,8 +156,8 @@ func injectDelayToUmount2(ctx context.Context, t *testing.T, shimCli apitask.Tas
 	return doneCh
 }
 
-func connectToShim(ctx context.Context, t *testing.T, id string) apitask.TaskService {
-	addr, err := shim.SocketAddress(ctx, containerdEndpoint, id)
+func connectToShim(ctx context.Context, t *testing.T, ctrdEndpoint string, version int, id string) shimcore.TaskServiceClient {
+	addr, err := shim.SocketAddress(ctx, ctrdEndpoint, id, false)
 	require.NoError(t, err)
 	addr = strings.TrimPrefix(addr, "unix://")
 
@@ -162,10 +165,12 @@ func connectToShim(ctx context.Context, t *testing.T, id string) apitask.TaskSer
 	require.NoError(t, err)
 
 	client := ttrpc.NewClient(conn)
-	return apitask.NewTaskClient(client)
+	cli, err := shimcore.NewTaskClient(client, version)
+	require.NoError(t, err)
+	return cli
 }
 
-func shimPid(ctx context.Context, t *testing.T, shimCli apitask.TaskService) uint32 {
+func shimPid(ctx context.Context, t *testing.T, shimCli shimcore.TaskServiceClient) uint32 {
 	resp, err := shimCli.Connect(ctx, &apitask.ConnectRequest{})
 	require.NoError(t, err)
 	return resp.GetShimPid()
